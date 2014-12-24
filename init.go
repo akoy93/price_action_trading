@@ -13,12 +13,15 @@ import (
 
 const (
 	// symbol, month, day, year, month, day, year
-	YAHOO_FINANCE_API_URL string = "http://real-chart.finance.yahoo.com/table.csv?s=%s&d=%s&e=%s&f=%s&g=d&a=%s&b=%s&c=%s&ignore=.csv"
-	STOCK_FILE            string = "/Users/albert/Desktop/stocks/stocks_sample.txt"
-	NUM_YEARS_DATA        int    = 1
-	START_PIVOT_WIDTH     int    = 3
-	PIVOT_WIDTH           int    = 5
-	HORIZONTAL_THRESHOLD  float64 = 0.01
+	YAHOO_FINANCE_API_URL      string  = "http://real-chart.finance.yahoo.com/table.csv?s=%s&d=%s&e=%s&f=%s&g=d&a=%s&b=%s&c=%s&ignore=.csv"
+	STOCK_FILE                 string  = "/Users/albert/Desktop/stocks/stocks_sample.txt"
+	NUM_YEARS_DATA             int     = 1
+	START_PIVOT_WIDTH          int     = 3
+	PIVOT_WIDTH                int     = 5
+	HORIZONTAL_SLOPE_THRESHOLD float64 = 0.01
+	TREND_LINE                 string  = "Trend Line"
+	TREND_CHANNEL_LINE         string  = "Trend Channel Line"
+	SUPPORT                    string  = "Support"
 )
 
 type Line struct {
@@ -26,6 +29,13 @@ type Line struct {
 	Y1 float64
 	X2 int
 	Y2 float64
+}
+
+type Intersection struct {
+	Line  Line
+	Price float64
+	Date  string
+	Type  string
 }
 
 type StockData struct {
@@ -43,8 +53,42 @@ type StockBar struct {
 	AdjClose float64
 }
 
-func (l* Line) Slope() float64 {
-	return (l.Y2 - l.Y1) / float64(l.X2 - l.X1)
+func (l *Line) Slope() float64 {
+	return (l.Y2 - l.Y1) / float64(l.X2-l.X1)
+}
+
+func (l *Line) Crosses(x int, high, low float64) (float64, bool) {
+	projection := l.GetProjection(x)
+	return projection, projection <= high && projection >= low
+}
+
+func (l *Line) GetProjection(x int) float64 {
+	return l.Y1 + (l.Slope() * float64(x-l.X1))
+}
+
+func (l *Line) Print(stock *StockData) {
+	fmt.Println(l.X1, stock.Data[l.X1].Date, fmt.Sprintf("$%.2f", l.Y1))
+	fmt.Println(l.X2, stock.Data[l.X2].Date, fmt.Sprintf("$%.2f", l.Y2))
+}
+
+func (l *Line) NoPivotsBelow(stock *StockData, pivots []int) bool {
+	for _, pivot := range pivots {
+		projection := l.GetProjection(pivot)
+		if stock.Data[pivot].Low < projection {
+			return false
+		}
+	}
+	return true
+}
+
+func (l *Line) NoPivotsAbove(stock *StockData, pivots []int) bool {
+	for _, pivot := range pivots {
+		projection := l.GetProjection(pivot)
+		if stock.Data[pivot].High > projection {
+			return false
+		}
+	}
+	return true
 }
 
 func main() {
@@ -72,38 +116,49 @@ func main() {
 
 	for i := 0; i < 15; i++ {
 		stock := <-c
-		fmt.Println(stock.Symbol)
-		trendLines, trendChannelLines, horizontalLines := getLines(stock, false)
-		fmt.Println(len(trendLines), len(trendChannelLines), len(horizontalLines))
-		for _, line := range trendChannelLines {
-			fmt.Println(line.X1, stock.Data[line.X1].Date)
-			fmt.Println(line.X2, stock.Data[line.X2].Date)
-			fmt.Println(line.Y1, line.Y2)
-			fmt.Println(line.Slope())
-			fmt.Println()
+		trendLines, trendChannelLines, horizontalLines := getLines(&stock, false)
+		intersections, ok := evaluate(&stock, trendLines, trendChannelLines, horizontalLines)
+		if ok {
+			for _, intersection := range intersections {
+				intersection.Line.Print(&stock)
+				fmt.Printf("$%.2f\n", intersection.Price)
+				fmt.Println(intersection.Date)
+				fmt.Println(intersection.Type)
+			}
 		}
-
-		// for _, pivot := range getPivots(stock, false, PIVOT_WIDTH) {
-		// 	fmt.Println(stock.Data[pivot].Date)
-		// }
-		// for _, pivotIndex := range getStartPivots(stock, false) {
-		// 	fmt.Println(stock.Data[pivotIndex].Date)
-		// }
 	}
 
 	var input string
 	fmt.Scanln(&input)
 }
 
+func evaluate(stock *StockData, trendLines, trendChannelLines, horizontalLines []Line) ([]Intersection, bool) {
+	var intersections []Intersection
+	lastBarIndex := len(stock.Data) - 1
+	for _, line := range trendChannelLines {
+		price, crosses := line.Crosses(lastBarIndex, stock.Data[lastBarIndex].High, stock.Data[lastBarIndex].Low)
+		if crosses {
+			intersection := Intersection{line, price, stock.Data[lastBarIndex].Date, TREND_CHANNEL_LINE}
+			intersections = append(intersections, intersection)
+		}
+	}
+
+	return intersections, len(intersections) > 0
+}
+
+// draw lines for low pivots:
+// iteratively go through pivots
+// have an anchor pivot (use start pivots as anchor pivots)
+// create a line if a next pivot creates a line with a slope less than what's been seen so far
+
 // returns trendLines, trendChannelLines, horizontalLines
-func getLines(stock StockData, getOverLines bool) ([]Line, []Line, []Line) {
+func getLines(stock *StockData, getOverLines bool) ([]Line, []Line, []Line) {
 	startPivots := getStartPivots(stock, getOverLines)
 	endPivots := getPivots(stock, getOverLines, PIVOT_WIDTH)
 	return getLinesFromPivots(stock, startPivots, endPivots, getOverLines)
 }
 
-// add checks for empty pivots
-func getLinesFromPivots(stock StockData, startPivots []int, pivots []int, getHighLines bool) ([]Line, []Line, []Line) {
+func getLinesFromPivots(stock *StockData, startPivots []int, pivots []int, getHighLines bool) ([]Line, []Line, []Line) {
 	var lines []Line
 	currentPivotIndex := 0
 
@@ -126,13 +181,13 @@ func getLinesFromPivots(stock StockData, startPivots []int, pivots []int, getHig
 				// draw lines
 				if getHighLines {
 					currLine := Line{startPivot, stock.Data[startPivot].High, pivot, stock.Data[pivot].High}
-					if prevLine == nil || currLine.Slope() >= prevLineConverted.Slope() {
+					if currLine.NoPivotsAbove(stock, pivots[j:]) && (prevLine == nil || currLine.Slope() >= prevLineConverted.Slope()) {
 						prevLine = currLine
 						lines = append(lines, currLine)
 					}
 				} else {
 					currLine := Line{startPivot, stock.Data[startPivot].Low, pivot, stock.Data[pivot].Low}
-					if prevLine == nil || currLine.Slope() <= prevLineConverted.Slope() {
+					if currLine.NoPivotsBelow(stock, pivots[j:]) && (prevLine == nil || currLine.Slope() <= prevLineConverted.Slope()) {
 						prevLine = currLine
 						lines = append(lines, currLine)
 					}
@@ -147,17 +202,17 @@ func getLinesFromPivots(stock StockData, startPivots []int, pivots []int, getHig
 
 	for _, line := range lines {
 		if getHighLines {
-			if line.Slope() > HORIZONTAL_THRESHOLD {
+			if line.Slope() > HORIZONTAL_SLOPE_THRESHOLD {
 				trendChannelLines = append(trendChannelLines, line)
-			} else if line.Slope() < -HORIZONTAL_THRESHOLD {
+			} else if line.Slope() < -HORIZONTAL_SLOPE_THRESHOLD {
 				trendLines = append(trendLines, line)
 			} else {
 				horizontalLines = append(horizontalLines, line)
 			}
 		} else {
-			if line.Slope() > HORIZONTAL_THRESHOLD {
+			if line.Slope() > HORIZONTAL_SLOPE_THRESHOLD {
 				trendLines = append(trendLines, line)
-			} else if line.Slope() < -HORIZONTAL_THRESHOLD {
+			} else if line.Slope() < -HORIZONTAL_SLOPE_THRESHOLD {
 				trendChannelLines = append(trendChannelLines, line)
 			} else {
 				horizontalLines = append(horizontalLines, line)
@@ -168,16 +223,11 @@ func getLinesFromPivots(stock StockData, startPivots []int, pivots []int, getHig
 	return trendLines, trendChannelLines, horizontalLines
 }
 
-// draw lines for low pivots:
-// iteratively go through pivots
-// have an anchor pivot (use start pivots as anchor pivots)
-// create a line if a next pivot creates a line with a slope less than what's been seen so far
-
-func getStartPivots(stock StockData, getHighPivots bool) []int {
+func getStartPivots(stock *StockData, getHighPivots bool) []int {
 	return getPivots(stock, getHighPivots, START_PIVOT_WIDTH)
 }
 
-func getPivots(stock StockData, getHighPivots bool, width int) []int {
+func getPivots(stock *StockData, getHighPivots bool, width int) []int {
 	var pivots []int
 	data := stock.Data
 
