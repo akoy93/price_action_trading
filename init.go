@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"encoding/csv"
 	"fmt"
+	"io/ioutil"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"strconv"
@@ -14,14 +16,17 @@ import (
 const (
 	// symbol, month, day, year, month, day, year
 	YAHOO_FINANCE_API_URL      string  = "http://real-chart.finance.yahoo.com/table.csv?s=%s&d=%s&e=%s&f=%s&g=d&a=%s&b=%s&c=%s&ignore=.csv"
-	STOCK_FILE                 string  = "/Users/albert/Desktop/stocks/stocks_sample.txt"
+	STOCK_FILE                 string  = "/Users/albert/Desktop/stocks/stocks.txt"
+	OUTPUT_FILE                string  = "/Users/albert/Desktop/stocks/output.txt"
+	OUTPUT_SYMBOLS_FILE        string  = "/Users/albert/Desktop/stocks/output_symbols.txt"
 	NUM_YEARS_DATA             int     = 1
 	START_PIVOT_WIDTH          int     = 3
 	PIVOT_WIDTH                int     = 5
-	HORIZONTAL_SLOPE_THRESHOLD float64 = 0.01
+	HORIZONTAL_SLOPE_THRESHOLD float64 = 0.005
 	TREND_LINE                 string  = "Trend Line"
 	TREND_CHANNEL_LINE         string  = "Trend Channel Line"
 	SUPPORT                    string  = "Support"
+	NUM_INTERSECTIONS_REQUIRED int     = 2
 )
 
 type Line struct {
@@ -66,9 +71,11 @@ func (l *Line) GetProjection(x int) float64 {
 	return l.Y1 + (l.Slope() * float64(x-l.X1))
 }
 
-func (l *Line) Print(stock *StockData) {
-	fmt.Println(l.X1, stock.Data[l.X1].Date, fmt.Sprintf("$%.2f", l.Y1))
-	fmt.Println(l.X2, stock.Data[l.X2].Date, fmt.Sprintf("$%.2f", l.Y2))
+func (l *Line) ToString(stock *StockData) string {
+	str := ""
+	str += fmt.Sprintf("%s - %s - %d\n", stock.Data[l.X1].Date, fmt.Sprintf("$%.2f", l.Y1), l.X1)
+	str += fmt.Sprintf("%s - %s - %d\n", stock.Data[l.X2].Date, fmt.Sprintf("$%.2f", l.Y2), l.X2)
+	return str
 }
 
 func (l *Line) NoPivotsBelow(stock *StockData, pivots []int) bool {
@@ -96,7 +103,7 @@ func main() {
 	month := fmt.Sprintf("%02d", t.Month()-1)
 	itoa := strconv.Itoa
 
-	var c chan StockData = make(chan StockData, 15)
+	var c chan interface{} = make(chan interface{}, 1)
 
 	file, err := os.Open(STOCK_FILE)
 	if err != nil {
@@ -104,9 +111,11 @@ func main() {
 	}
 	defer file.Close()
 
+	numLines := 0
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		symbol := scanner.Text()
+		numLines++
 		go getStockData(c, symbol, month, itoa(t.Day()), itoa(t.Year()), month, itoa(t.Day()), itoa(t.Year()-NUM_YEARS_DATA))
 	}
 
@@ -114,36 +123,87 @@ func main() {
 		log.Fatal(err)
 	}
 
-	for i := 0; i < 15; i++ {
-		stock := <-c
-		trendLines, trendChannelLines, horizontalLines := getLines(&stock, false)
-		intersections, ok := evaluate(&stock, trendLines, trendChannelLines, horizontalLines)
-		if ok {
-			for _, intersection := range intersections {
-				intersection.Line.Print(&stock)
-				fmt.Printf("$%.2f\n", intersection.Price)
-				fmt.Println(intersection.Date)
-				fmt.Println(intersection.Type)
+	output := ""
+	outputSymbols := ""
+	for i := 1; i <= numLines; i++ {
+		data := <-c
+		if data != nil {
+			stock := data.(StockData)
+			fmt.Printf("(%d/%d) Evaluating %s...\n", i, numLines, stock.Symbol)
+			trendChannelLines, trendLines, horizontalLines := getLines(&stock, false)
+			tclInts, tlInts, hInts := getAllIntersections(&stock, trendChannelLines, trendLines, horizontalLines)
+			setup, ok := getBestSetup(tclInts, tlInts, hInts)
+			if ok {
+				output += fmt.Sprintf("=============== %s ===============\n", stock.Symbol)
+				outputSymbols += stock.Symbol + "\n"
+				for _, intersection := range setup {
+					output += fmt.Sprintf("----- %s -----\n", intersection.Type)
+					output += intersection.Line.ToString(&stock)
+					output += fmt.Sprintf("Crosses $%.2f on %s\n", intersection.Price, intersection.Date)
+				}
+			}
+		} else {
+			fmt.Printf("(%d/%d) Evaluating...\n", i, numLines)
+		}
+	}
+
+	// write to file
+	outputBytes := []byte(output)
+	outputSymbolsBytes := []byte(outputSymbols)
+
+	outputErr := ioutil.WriteFile(OUTPUT_FILE, outputBytes, 0644)
+	outputSymbolsErr := ioutil.WriteFile(OUTPUT_SYMBOLS_FILE, outputSymbolsBytes, 0644)
+	if outputErr != nil || outputSymbolsErr != nil {
+		fmt.Println("ERROR writing to file!")
+	} else {
+		fmt.Println("DONE!")
+	}
+}
+
+func getBestSetup(trendChannelLineIntersections, trendLineIntersections, horizontalLineIntersections []Intersection) ([]Intersection, bool) {
+	var bestPair []Intersection
+	bestRange := math.MaxFloat64
+
+	for _, tcl := range trendChannelLineIntersections {
+		for _, tl := range trendLineIntersections {
+			currRange, currPair := getPairRange(tcl, tl)
+			if currRange < bestRange {
+				bestRange = currRange
+				bestPair = currPair
 			}
 		}
 	}
 
-	var input string
-	fmt.Scanln(&input)
+	setup := append(bestPair, horizontalLineIntersections...)
+
+	return setup, len(setup)-len(horizontalLineIntersections) >= NUM_INTERSECTIONS_REQUIRED
 }
 
-func evaluate(stock *StockData, trendLines, trendChannelLines, horizontalLines []Line) ([]Intersection, bool) {
+func getPairRange(tclIntersection, tlIntersection Intersection) (float64, []Intersection) {
+	return math.Abs(tclIntersection.Price - tlIntersection.Price), []Intersection{tclIntersection, tlIntersection}
+}
+
+func getAllIntersections(stock *StockData, trendChannelLines, trendLines, horizontalLines []Line) ([]Intersection, []Intersection, []Intersection) {
+	trendChannelLineIntersections := getIntersections(stock, TREND_CHANNEL_LINE, trendChannelLines)
+	trendLineIntersections := getIntersections(stock, TREND_LINE, trendLines)
+	horizontalLineIntersections := getIntersections(stock, SUPPORT, horizontalLines)
+
+	return trendChannelLineIntersections, trendLineIntersections, horizontalLineIntersections
+}
+
+func getIntersections(stock *StockData, lineType string, lines []Line) []Intersection {
 	var intersections []Intersection
+
 	lastBarIndex := len(stock.Data) - 1
-	for _, line := range trendChannelLines {
+	for _, line := range lines {
 		price, crosses := line.Crosses(lastBarIndex, stock.Data[lastBarIndex].High, stock.Data[lastBarIndex].Low)
 		if crosses {
-			intersection := Intersection{line, price, stock.Data[lastBarIndex].Date, TREND_CHANNEL_LINE}
+			intersection := Intersection{line, price, stock.Data[lastBarIndex].Date, lineType}
 			intersections = append(intersections, intersection)
 		}
 	}
 
-	return intersections, len(intersections) > 0
+	return intersections
 }
 
 // draw lines for low pivots:
@@ -220,7 +280,7 @@ func getLinesFromPivots(stock *StockData, startPivots []int, pivots []int, getHi
 		}
 	}
 
-	return trendLines, trendChannelLines, horizontalLines
+	return trendChannelLines, trendLines, horizontalLines
 }
 
 func getStartPivots(stock *StockData, getHighPivots bool) []int {
@@ -254,10 +314,11 @@ func getPivots(stock *StockData, getHighPivots bool, width int) []int {
 	return pivots
 }
 
-func getStockData(c chan StockData, symbol, endMonth, endDay, endYear, startMonth, startDay, startYear string) {
+func getStockData(c chan interface{}, symbol, endMonth, endDay, endYear, startMonth, startDay, startYear string) {
 	url := fmt.Sprintf(YAHOO_FINANCE_API_URL, symbol, endMonth, endDay, endYear, startMonth, startDay, startYear)
 	resp, httpErr := http.Get(url)
 	if httpErr != nil {
+		go getStockData(c, symbol, endMonth, endDay, endYear, startMonth, startDay, startYear)
 		return
 	}
 	defer resp.Body.Close()
@@ -266,6 +327,7 @@ func getStockData(c chan StockData, symbol, endMonth, endDay, endYear, startMont
 	rawCSVdata, csvErr := reader.ReadAll()
 
 	if csvErr != nil {
+		c <- nil
 		return
 	}
 
