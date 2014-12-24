@@ -16,7 +16,7 @@ import (
 const (
 	// symbol, month, day, year, month, day, year
 	YAHOO_FINANCE_API_URL      string  = "http://real-chart.finance.yahoo.com/table.csv?s=%s&d=%s&e=%s&f=%s&g=d&a=%s&b=%s&c=%s&ignore=.csv"
-	STOCK_FILE                 string  = "/Users/albert/Desktop/stocks/stocks.txt"
+	STOCK_FILE                 string  = "/Users/albert/Desktop/stocks/stocks_sample.txt"
 	OUTPUT_FILE                string  = "/Users/albert/Desktop/stocks/output.txt"
 	OUTPUT_SYMBOLS_FILE        string  = "/Users/albert/Desktop/stocks/output_symbols.txt"
 	NUM_YEARS_DATA             int     = 1
@@ -135,11 +135,23 @@ func main() {
 			setup, ok := getBestSetup(tclInts, tlInts, hInts)
 			if ok {
 				output += fmt.Sprintf("=============== %s ===============\n", stock.Symbol)
+				output += "++++++++++++ Best Setup ++++++++++++\n"
 				outputSymbols += stock.Symbol + "\n"
 				for _, intersection := range setup {
 					output += fmt.Sprintf("----- %s -----\n", intersection.Type)
 					output += intersection.Line.ToString(&stock)
 					output += fmt.Sprintf("Crosses $%.2f on %s\n", intersection.Price, intersection.Date)
+				}
+
+				// print all data
+				output += "++++++++++++ All Lines ++++++++++++\n"
+				lines := [][]Intersection{tclInts, tlInts, hInts}
+				for _, set := range lines {
+					for _, intersection := range set {
+						output += fmt.Sprintf("----- %s -----\n", intersection.Type)
+						output += intersection.Line.ToString(&stock)
+						output += fmt.Sprintf("Crosses $%.2f on %s\n", intersection.Price, intersection.Date)
+					}
 				}
 			}
 		} else {
