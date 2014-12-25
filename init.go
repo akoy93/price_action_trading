@@ -16,9 +16,9 @@ import (
 const (
 	// symbol, month, day, year, month, day, year
 	YAHOO_FINANCE_API_URL      string  = "http://real-chart.finance.yahoo.com/table.csv?s=%s&d=%s&e=%s&f=%s&g=d&a=%s&b=%s&c=%s&ignore=.csv"
-	STOCK_FILE                 string  = "/Users/albert/Desktop/stocks/stocks_sample.txt"
-	OUTPUT_FILE                string  = "/Users/albert/Desktop/stocks/output.txt"
-	OUTPUT_SYMBOLS_FILE        string  = "/Users/albert/Desktop/stocks/output_symbols.txt"
+	STOCK_FILE                 string  = "/Users/albert/Desktop/stocks/stocks.txt"
+	OUTPUT_FILE                string  = "/Users/albert/Desktop/stocks/output/%s_output.txt"
+	OUTPUT_SYMBOLS_FILE        string  = "/Users/albert/Desktop/stocks/output/%s_symbols.txt"
 	NUM_YEARS_DATA             int     = 1
 	START_PIVOT_WIDTH          int     = 3
 	PIVOT_WIDTH                int     = 5
@@ -163,8 +163,8 @@ func main() {
 	outputBytes := []byte(output)
 	outputSymbolsBytes := []byte(outputSymbols)
 
-	outputErr := ioutil.WriteFile(OUTPUT_FILE, outputBytes, 0644)
-	outputSymbolsErr := ioutil.WriteFile(OUTPUT_SYMBOLS_FILE, outputSymbolsBytes, 0644)
+	outputErr := ioutil.WriteFile(fmt.Sprintf(OUTPUT_FILE, t.Format("01-02-2006")), outputBytes, 0644)
+	outputSymbolsErr := ioutil.WriteFile(fmt.Sprintf(OUTPUT_SYMBOLS_FILE, t.Format("01-02-2006")), outputSymbolsBytes, 0644)
 	if outputErr != nil || outputSymbolsErr != nil {
 		fmt.Println("ERROR writing to file!")
 	} else {
