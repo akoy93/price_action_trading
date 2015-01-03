@@ -1,10 +1,10 @@
 // This program will be used to backtest a swing trading strategy utilizing
-// leveraged ETFs such as TQQQ and SQQQ. For this strategy, position 
+// leveraged ETFs such as TQQQ and SQQQ. For this strategy, position
 // management will be completely determined by price action within specified
-// multiples of the ETF's Average True Range. 
+// multiples of the ETF's Average True Range.
 
 // The program will accept two parameters: a start date and an end date. The
-// program will then output the results of the backtest if we were to 
+// program will then output the results of the backtest if we were to
 // implement the strategy between the two dates.
 // USAGE: go run swing_trade_etf_backtest.go 01-01-2000 01-01-2005
 
@@ -43,21 +43,23 @@ const (
 	ATR_MULT_ADD_POSITION    float64 = 2.5
 
 	// Portfolio Configuration
-	INITIAL_CAPITAL   float64 = 100000.0
-	LEVERAGE_MULTIPLE float64 = 3.0
-	LONG_PARTIAL_PERCENTAGE float64 = 0.5
+	INITIAL_CAPITAL          float64 = 100000.0
+	LEVERAGE_MULTIPLE        float64 = 3.0
+	LONG_PARTIAL_PERCENTAGE  float64 = 0.5
+	LONG_MAX_PERCENTAGE      float64 = 1
 	SHORT_PARTIAL_PERCENTAGE float64 = 0.5
+	SHORT_MAX_PERCENTAGE     float64 = 1
 )
 
 type Portfolio struct {
-	StartDate string
-	EndDate string
-	CurrentDate string
-	InitialValue float64
-	CurrentValue float64
+	StartDate       string
+	EndDate         string
+	CurrentDate     string
+	InitialValue    float64
+	CurrentValue    float64
 	CurrentPosition interface{}
 	ClosedPositions []Position
-	Transactions []Transaction
+	Transactions    []Transaction
 }
 
 // enters an initial position
@@ -76,9 +78,9 @@ func (p *Portfolio) EnterInitialPosition(data *StockData) {
 			// TODO: it is possible that an extreme is never chosen if ATR range is too wide
 			// get initial extreme
 			if currExtreme == (Extreme{}) {
-				if bar.Close > initialPrice + ATR_MULT_ADD_POSITION * initialATR {
+				if bar.Close > initialPrice+ATR_MULT_ADD_POSITION*initialATR {
 					currExtreme = Extreme{MAX_TYPE, bar.Close, bar.ATR}
-				} else if bar.Close < initialPrice - ATR_MULT_ADD_POSITION * initialATR {
+				} else if bar.Close < initialPrice-ATR_MULT_ADD_POSITION*initialATR {
 					currExtreme = Extreme{MIN_TYPE, bar.Close, bar.ATR}
 				}
 			} else { // continually update the extreme as needed
@@ -118,7 +120,7 @@ func (p *Portfolio) EnterInitialPosition(data *StockData) {
 		} else if startDatePrice < currExtreme.getATRThreshold(ATR_MULT_CUT_POSITION) { // 50% long
 			p.CurrentPosition = &Position{ETF, LONG_TYPE, LEVERAGE_MULTIPLE, p.InitialValue * LONG_PARTIAL_PERCENTAGE, p.InitialValue * LONG_PARTIAL_PERCENTAGE, startDate, startDatePrice, &currExtreme, startDate, startDatePrice}
 		} else { // 100% long
-			p.CurrentPosition = &Position{ETF, LONG_TYPE, LEVERAGE_MULTIPLE, p.InitialValue, p.InitialValue, startDate, startDatePrice, &currExtreme, startDate, startDatePrice}
+			p.CurrentPosition = &Position{ETF, LONG_TYPE, LEVERAGE_MULTIPLE, p.InitialValue * LONG_MAX_PERCENTAGE, p.InitialValue * LONG_MAX_PERCENTAGE, startDate, startDatePrice, &currExtreme, startDate, startDatePrice}
 		}
 	} else if currExtreme.Type == MIN_TYPE {
 		if startDatePrice > currExtreme.getATRThreshold(ATR_MULT_ADD_POSITION) { // 100% long
@@ -131,7 +133,7 @@ func (p *Portfolio) EnterInitialPosition(data *StockData) {
 		} else if startDatePrice > currExtreme.getATRThreshold(ATR_MULT_CUT_POSITION) { // 50% short
 			p.CurrentPosition = &Position{ETF, SHORT_TYPE, LEVERAGE_MULTIPLE, p.InitialValue * SHORT_PARTIAL_PERCENTAGE, p.InitialValue * SHORT_PARTIAL_PERCENTAGE, startDate, startDatePrice, &currExtreme, startDate, startDatePrice}
 		} else { // 100% short
-			p.CurrentPosition = &Position{ETF, SHORT_TYPE, LEVERAGE_MULTIPLE, p.InitialValue, p.InitialValue, startDate, startDatePrice, &currExtreme, startDate, startDatePrice}
+			p.CurrentPosition = &Position{ETF, SHORT_TYPE, LEVERAGE_MULTIPLE, p.InitialValue * SHORT_MAX_PERCENTAGE, p.InitialValue * SHORT_MAX_PERCENTAGE, startDate, startDatePrice, &currExtreme, startDate, startDatePrice}
 		}
 	} else {
 		panic("ILLEGAL TYPE")
@@ -202,20 +204,20 @@ func (p *Portfolio) AdjustPosition(currentDate string, currClose, currATR float6
 
 func (p *Portfolio) ToString() string {
 	// TODO: print out current position and last transaction
-	return fmt.Sprintf("%s - Current Capital: $%.2f\nCurrent Position %s", p.CurrentDate, p.CurrentValue, p.CurrentPosition.(*Position).ToString())
+	return fmt.Sprintf("%s - Current Capital: $%.2f\nCurrent Position: %s", p.CurrentDate, p.CurrentValue, p.CurrentPosition.(*Position).ToString())
 }
 
 type Position struct {
-	Symbol string
-	Type string
-	LeverageMultiple float64
+	Symbol            string
+	Type              string
+	LeverageMultiple  float64
 	InitialInvestment float64
-	CurrentValue float64
-	EntryDate time.Time
-	EntryPrice float64
+	CurrentValue      float64
+	EntryDate         time.Time
+	EntryPrice        float64
 	ReferencedExtreme *Extreme
-	CurrentDate time.Time
-	CurrentPrice float64
+	CurrentDate       time.Time
+	CurrentPrice      float64
 }
 
 // returns the net change in the position
@@ -237,14 +239,14 @@ func (p *Position) Update(currDate time.Time, currClose float64) float64 {
 }
 
 func (p *Position) ToString() string {
-	return fmt.Sprintf("%s %s - %.2fx Leverage - Entry Price and Date: $%.1f (%s) - Current Price and Date: $%.2f (%s) - Initial Investment: $%.2f - Current Value: $%.2f", 
-		p.Type, p.Symbol, p.LeverageMultiple, p.EntryPrice, p.EntryDate.String(), p.CurrentPrice, p.CurrentDate.String(), p.InitialInvestment, p.CurrentValue)
+	return fmt.Sprintf("%s %s - %.1fx Leverage - Entry Price and Date: $%.2f (%s) - Current Price and Date: $%.2f (%s) - Initial Investment: $%.2f - Current Value: $%.2f",
+		p.Type, p.Symbol, p.LeverageMultiple, p.EntryPrice, p.EntryDate.Format(TIME_LAYOUT), p.CurrentPrice, p.CurrentDate.Format(TIME_LAYOUT), p.InitialInvestment, p.CurrentValue)
 }
 
 type Extreme struct {
-	Type string
+	Type  string
 	Value float64
-	ATR float64
+	ATR   float64
 }
 
 func (e *Extreme) getATRThreshold(multiple float64) float64 {
@@ -259,7 +261,6 @@ func (e *Extreme) getATRThreshold(multiple float64) float64 {
 
 type Transaction struct {
 	Date string
-
 }
 
 type StockData struct {
