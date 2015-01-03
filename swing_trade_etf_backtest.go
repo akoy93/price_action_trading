@@ -10,6 +10,8 @@
 
 // Key Assumptions:
 // - TQQQ and SQQQ reflect exactly 3x the daily percentage change in QQQ
+// - We enter positions exactly at their closing price for the day
+//   (this is close to realistic with EOD market orders)
 package main
 
 import (
@@ -113,27 +115,27 @@ func (p *Portfolio) EnterInitialPosition(data *StockData) {
 		if startDatePrice < currExtreme.getATRThreshold(ATR_MULT_ADD_POSITION) { // 100% short
 			panic("SHOULD NOT BE REACHABLE - SHORT")
 		} else if startDatePrice < currExtreme.getATRThreshold(ATR_MULT_CHANGE_POSITION) { // 50% short
-			p.CurrentPosition = &Position{ETF, SHORT_TYPE, LEVERAGE_MULTIPLE, p.InitialValue * SHORT_PARTIAL_PERCENTAGE, p.InitialValue * SHORT_PARTIAL_PERCENTAGE, startDate, startDatePrice, &currExtreme, startDate, startDatePrice}
+			p.CurrentPosition = &Position{ETF, SHORT_TYPE, LEVERAGE_MULTIPLE, SHORT_PARTIAL_PERCENTAGE, p.CurrentValue * SHORT_PARTIAL_PERCENTAGE, p.CurrentValue * SHORT_PARTIAL_PERCENTAGE, startDate, startDatePrice, &currExtreme, startDate, startDatePrice}
 		} else if startDatePrice < currExtreme.getATRThreshold(ATR_MULT_EXIT_POSITION) {
 			// add a dummy position. subsequent calls should update the portfolio.
-			p.CurrentPosition = &Position{ETF, LONG_TYPE, LEVERAGE_MULTIPLE, 0, 0, startDate, startDatePrice, &currExtreme, startDate, startDatePrice}
+			p.CurrentPosition = &Position{ETF, LONG_TYPE, LEVERAGE_MULTIPLE, 0, 0, 0, startDate, startDatePrice, &currExtreme, startDate, startDatePrice}
 		} else if startDatePrice < currExtreme.getATRThreshold(ATR_MULT_CUT_POSITION) { // 50% long
-			p.CurrentPosition = &Position{ETF, LONG_TYPE, LEVERAGE_MULTIPLE, p.InitialValue * LONG_PARTIAL_PERCENTAGE, p.InitialValue * LONG_PARTIAL_PERCENTAGE, startDate, startDatePrice, &currExtreme, startDate, startDatePrice}
+			p.CurrentPosition = &Position{ETF, LONG_TYPE, LEVERAGE_MULTIPLE, LONG_PARTIAL_PERCENTAGE, p.CurrentValue * LONG_PARTIAL_PERCENTAGE, p.CurrentValue * LONG_PARTIAL_PERCENTAGE, startDate, startDatePrice, &currExtreme, startDate, startDatePrice}
 		} else { // 100% long
-			p.CurrentPosition = &Position{ETF, LONG_TYPE, LEVERAGE_MULTIPLE, p.InitialValue * LONG_MAX_PERCENTAGE, p.InitialValue * LONG_MAX_PERCENTAGE, startDate, startDatePrice, &currExtreme, startDate, startDatePrice}
+			p.CurrentPosition = &Position{ETF, LONG_TYPE, LEVERAGE_MULTIPLE, LONG_MAX_PERCENTAGE, p.CurrentValue * LONG_MAX_PERCENTAGE, p.CurrentValue * LONG_MAX_PERCENTAGE, startDate, startDatePrice, &currExtreme, startDate, startDatePrice}
 		}
 	} else if currExtreme.Type == MIN_TYPE {
 		if startDatePrice > currExtreme.getATRThreshold(ATR_MULT_ADD_POSITION) { // 100% long
 			panic("SHOULD NOT BE REACHABLE - LONG")
 		} else if startDatePrice > currExtreme.getATRThreshold(ATR_MULT_CHANGE_POSITION) { // 50% long
-			p.CurrentPosition = &Position{ETF, LONG_TYPE, LEVERAGE_MULTIPLE, p.InitialValue * LONG_PARTIAL_PERCENTAGE, p.InitialValue * LONG_PARTIAL_PERCENTAGE, startDate, startDatePrice, &currExtreme, startDate, startDatePrice}
+			p.CurrentPosition = &Position{ETF, LONG_TYPE, LEVERAGE_MULTIPLE, LONG_PARTIAL_PERCENTAGE, p.CurrentValue * LONG_PARTIAL_PERCENTAGE, p.CurrentValue * LONG_PARTIAL_PERCENTAGE, startDate, startDatePrice, &currExtreme, startDate, startDatePrice}
 		} else if startDatePrice > currExtreme.getATRThreshold(ATR_MULT_EXIT_POSITION) {
 			// add a dummy position. subsequent calls should update the portfolio.
-			p.CurrentPosition = &Position{ETF, SHORT_TYPE, LEVERAGE_MULTIPLE, 0, 0, startDate, startDatePrice, &currExtreme, startDate, startDatePrice}
+			p.CurrentPosition = &Position{ETF, SHORT_TYPE, LEVERAGE_MULTIPLE, 0, 0, 0, startDate, startDatePrice, &currExtreme, startDate, startDatePrice}
 		} else if startDatePrice > currExtreme.getATRThreshold(ATR_MULT_CUT_POSITION) { // 50% short
-			p.CurrentPosition = &Position{ETF, SHORT_TYPE, LEVERAGE_MULTIPLE, p.InitialValue * SHORT_PARTIAL_PERCENTAGE, p.InitialValue * SHORT_PARTIAL_PERCENTAGE, startDate, startDatePrice, &currExtreme, startDate, startDatePrice}
+			p.CurrentPosition = &Position{ETF, SHORT_TYPE, LEVERAGE_MULTIPLE, SHORT_PARTIAL_PERCENTAGE, p.CurrentValue * SHORT_PARTIAL_PERCENTAGE, p.CurrentValue * SHORT_PARTIAL_PERCENTAGE, startDate, startDatePrice, &currExtreme, startDate, startDatePrice}
 		} else { // 100% short
-			p.CurrentPosition = &Position{ETF, SHORT_TYPE, LEVERAGE_MULTIPLE, p.InitialValue * SHORT_MAX_PERCENTAGE, p.InitialValue * SHORT_MAX_PERCENTAGE, startDate, startDatePrice, &currExtreme, startDate, startDatePrice}
+			p.CurrentPosition = &Position{ETF, SHORT_TYPE, LEVERAGE_MULTIPLE, SHORT_MAX_PERCENTAGE, p.CurrentValue * SHORT_MAX_PERCENTAGE, p.CurrentValue * SHORT_MAX_PERCENTAGE, startDate, startDatePrice, &currExtreme, startDate, startDatePrice}
 		}
 	} else {
 		panic("ILLEGAL TYPE")
@@ -152,58 +154,195 @@ func (p *Portfolio) UpdatePortfolio(currentDate time.Time, currClose float64) {
 	// date, short or long, percentage gain, new value
 }
 
-// checks if the current closing price moves us past an ATR multiple. if it does,
-// we adjust the current position accordingly.
-// returns true if the position was adjusted
-func (p *Portfolio) AdjustPosition(currentDate string, currClose, currATR float64) bool {
+func (p *Portfolio) AdjustPosition(currentDate time.Time, currClose, currATR float64) {
 	// pass along current extremes
 	if p.CurrentPosition != nil {
 		currPosition := p.CurrentPosition.(*Position)
 		currExtreme := currPosition.ReferencedExtreme
-		if currPosition.Type == LONG_TYPE {
-			if currExtreme.Type == MIN_TYPE {
+		if currExtreme.Type == MIN_TYPE {
+			if currClose > currExtreme.getATRThreshold(ATR_MULT_ADD_POSITION) { // max long
+				*currExtreme = Extreme{MAX_TYPE, currClose, currATR}
+				if p.PositionChanged(LONG_TYPE, LONG_MAX_PERCENTAGE) {
+					p.CurrentPosition = &Position{ETF, LONG_TYPE, LEVERAGE_MULTIPLE, LONG_MAX_PERCENTAGE, p.CurrentValue * LONG_MAX_PERCENTAGE, p.CurrentValue * LONG_MAX_PERCENTAGE, currentDate, currClose, currExtreme, currentDate, currClose}
+				} else {
+					currPosition.ReferencedExtreme = currExtreme
+				}
+			} else if currClose > currExtreme.getATRThreshold(ATR_MULT_CHANGE_POSITION) { // partial long
+				if p.PositionChanged(LONG_TYPE, LONG_PARTIAL_PERCENTAGE) {
+					p.CurrentPosition = &Position{ETF, LONG_TYPE, LEVERAGE_MULTIPLE, LONG_PARTIAL_PERCENTAGE, p.CurrentValue * LONG_PARTIAL_PERCENTAGE, p.CurrentValue * LONG_PARTIAL_PERCENTAGE, currentDate, currClose, currExtreme, currentDate, currClose}
+				}
+			} else if currClose > currExtreme.getATRThreshold(ATR_MULT_EXIT_POSITION) {
+				// add a dummy position. subsequent calls should update the portfolio.
+				if p.PositionChanged(SHORT_TYPE, 0) {
+					p.CurrentPosition = &Position{ETF, SHORT_TYPE, LEVERAGE_MULTIPLE, 0, 0, 0, currentDate, currClose, currExtreme, currentDate, currClose}
+				}
+			} else if currClose > currExtreme.getATRThreshold(ATR_MULT_CUT_POSITION) { // partial short
+				if p.PositionChanged(SHORT_TYPE, SHORT_PARTIAL_PERCENTAGE) {
+					p.CurrentPosition = &Position{ETF, SHORT_TYPE, LEVERAGE_MULTIPLE, SHORT_PARTIAL_PERCENTAGE, p.CurrentValue * SHORT_PARTIAL_PERCENTAGE, p.CurrentValue * SHORT_PARTIAL_PERCENTAGE, currentDate, currClose, currExtreme, currentDate, currClose}
+				}
+			} else { // max short
 				if currClose < currExtreme.Value {
-					// change position and update extreme
-				} else {
-					if currClose > currExtreme.getATRThreshold(ATR_MULT_ADD_POSITION) {
-						// ensure we are 100% long
-					} else if currClose > currExtreme.getATRThreshold(ATR_MULT_CHANGE_POSITION) {
-						// ensure we are 100% long
-					}
+					*currExtreme = Extreme{MIN_TYPE, currClose, currATR}
 				}
-			} else if currExtreme.Type == MAX_TYPE {
-				if currClose >= currExtreme.Value {
-					currExtreme.Value = currClose
-					currExtreme.ATR = currATR
+				if p.PositionChanged(SHORT_TYPE, SHORT_MAX_PERCENTAGE) {
+					p.CurrentPosition = &Position{ETF, SHORT_TYPE, LEVERAGE_MULTIPLE, SHORT_MAX_PERCENTAGE, p.CurrentValue * SHORT_MAX_PERCENTAGE, p.CurrentValue * SHORT_MAX_PERCENTAGE, currentDate, currClose, currExtreme, currentDate, currClose}
 				} else {
-					// check ATR multiples
+					currPosition.ReferencedExtreme = currExtreme
 				}
-			} else {
-				panic("ILLEGAL TYPE")
 			}
-		} else if currPosition.Type == SHORT_TYPE {
-			if currExtreme.Type == MIN_TYPE {
-				if currClose <= currExtreme.Value {
-					currExtreme.Value = currClose
-					currExtreme.ATR = currATR
+		} else if currExtreme.Type == MAX_TYPE {
+			if currClose < currExtreme.getATRThreshold(ATR_MULT_ADD_POSITION) { // max short
+				*currExtreme = Extreme{MIN_TYPE, currClose, currATR}
+				if p.PositionChanged(SHORT_TYPE, SHORT_MAX_PERCENTAGE) {
+					p.CurrentPosition = &Position{ETF, SHORT_TYPE, LEVERAGE_MULTIPLE, SHORT_MAX_PERCENTAGE, p.CurrentValue * SHORT_MAX_PERCENTAGE, p.CurrentValue * SHORT_MAX_PERCENTAGE, currentDate, currClose, currExtreme, currentDate, currClose}
 				} else {
-					// check ATR multiples
+					currPosition.ReferencedExtreme = currExtreme
 				}
-			} else if currExtreme.Type == MAX_TYPE {
-
-			} else {
-				panic("ILLEGAL TYPE")
+			} else if currClose < currExtreme.getATRThreshold(ATR_MULT_CHANGE_POSITION) { // partial short
+				if p.PositionChanged(SHORT_TYPE, SHORT_PARTIAL_PERCENTAGE) {
+					p.CurrentPosition = &Position{ETF, SHORT_TYPE, LEVERAGE_MULTIPLE, SHORT_PARTIAL_PERCENTAGE, p.CurrentValue * SHORT_PARTIAL_PERCENTAGE, p.CurrentValue * SHORT_PARTIAL_PERCENTAGE, currentDate, currClose, currExtreme, currentDate, currClose}
+				}
+			} else if currClose < currExtreme.getATRThreshold(ATR_MULT_EXIT_POSITION) { // in cash
+				// add a dummy position. subsequent calls should update the portfolio.
+				if p.PositionChanged(LONG_TYPE, 0) {
+					p.CurrentPosition = &Position{ETF, LONG_TYPE, LEVERAGE_MULTIPLE, 0, 0, 0, currentDate, currClose, currExtreme, currentDate, currClose}
+				}
+			} else if currClose < currExtreme.getATRThreshold(ATR_MULT_CUT_POSITION) { // partial long
+				if p.PositionChanged(LONG_TYPE, LONG_PARTIAL_PERCENTAGE) {
+					p.CurrentPosition = &Position{ETF, LONG_TYPE, LEVERAGE_MULTIPLE, LONG_PARTIAL_PERCENTAGE, p.CurrentValue * LONG_PARTIAL_PERCENTAGE, p.CurrentValue * LONG_PARTIAL_PERCENTAGE, currentDate, currClose, currExtreme, currentDate, currClose}
+				}
+			} else { // max long
+				if currClose > currExtreme.Value {
+					*currExtreme = Extreme{MAX_TYPE, currClose, currATR}
+				}
+				if p.PositionChanged(LONG_TYPE, LONG_MAX_PERCENTAGE) {
+					p.CurrentPosition = &Position{ETF, LONG_TYPE, LEVERAGE_MULTIPLE, LONG_MAX_PERCENTAGE, p.CurrentValue * LONG_MAX_PERCENTAGE, p.CurrentValue * LONG_MAX_PERCENTAGE, currentDate, currClose, currExtreme, currentDate, currClose}
+				} else {
+					currPosition.ReferencedExtreme = currExtreme
+				}
 			}
 		} else {
 			panic("ILLEGAL TYPE")
 		}
 	}
-
-	return true
 }
 
+func (p *Portfolio) PositionChanged(positionType string, percentage float64) bool {
+	return !(p.CurrentPosition.(*Position).Type == positionType && p.CurrentPosition.(*Position).InitialPercentage == percentage)
+}
+
+// checks if the current closing price moves us past an ATR multiple. if it does,
+// we adjust the current position accordingly.
+// returns true if the position was adjusted
+// func (p *Portfolio) AdjustPosition(currentDate time.Time, currClose, currATR float64) {
+// 	// pass along current extremes
+// 	if p.CurrentPosition != nil {
+// 		currPosition := p.CurrentPosition.(*Position)
+// 		currExtreme := currPosition.ReferencedExtreme
+// 		if currExtreme.Type == MIN_TYPE {
+// 			if currClose < currExtreme.getATRThreshold(ATR_MULT_ADD_POSITION) { // 100% short
+// 				*currExtreme = Extreme{MAX_TYPE, currClose, currATR}
+// 				p.CurrentPosition = &Position{ETF, SHORT_TYPE, LEVERAGE_MULTIPLE, p.CurrentValue * SHORT_MAX_PERCENTAGE, p.CurrentValue * SHORT_MAX_PERCENTAGE, currentDate, currClose, currExtreme, currentDate, currClose}
+// 			} else if currClose < currExtreme.getATRThreshold(ATR_MULT_CHANGE_POSITION) { // 50% short
+// 				p.CurrentPosition = &Position{ETF, SHORT_TYPE, LEVERAGE_MULTIPLE, p.CurrentValue * SHORT_PARTIAL_PERCENTAGE, p.CurrentValue * SHORT_PARTIAL_PERCENTAGE, currentDate, currClose, currExtreme, currentDate, currClose}
+// 			} else if currClose < currExtreme.getATRThreshold(ATR_MULT_EXIT_POSITION) {
+// 				// add a dummy position. subsequent calls should update the portfolio.
+// 				p.CurrentPosition = &Position{ETF, LONG_TYPE, LEVERAGE_MULTIPLE, 0, 0, currentDate, currClose, currExtreme, currentDate, currClose}
+// 			} else if currClose < currExtreme.getATRThreshold(ATR_MULT_CUT_POSITION) { // 50% long
+// 				p.CurrentPosition = &Position{ETF, LONG_TYPE, LEVERAGE_MULTIPLE, p.CurrentValue * LONG_PARTIAL_PERCENTAGE, p.CurrentValue * LONG_PARTIAL_PERCENTAGE, currentDate, currClose, currExtreme, currentDate, currClose}
+// 			} else { // 100% long
+// 				if currClose < currExtreme.Value {
+// 					*currExtreme = Extreme{MIN_TYPE, currClose, currATR}
+// 				}
+// 				p.CurrentPosition = &Position{ETF, LONG_TYPE, LEVERAGE_MULTIPLE, p.CurrentValue * LONG_MAX_PERCENTAGE, p.CurrentValue * LONG_MAX_PERCENTAGE, currentDate, currClose, currExtreme, currentDate, currClose}
+// 			}
+// 			// if currClose > currExtreme.getATRThreshold(ATR_MULT_ADD_POSITION) {
+// 			// 	// ensure we are 100% long with a new maximum
+// 			// } else if currClose > currExtreme.getATRThreshold(ATR_MULT_CHANGE_POSITION) {
+// 			// 	// ensure we are 50% long
+// 			// } else if currClose > currExtreme.getATRThreshold(ATR_MULT_EXIT_POSITION) {
+// 			// 	// ensure we are exited
+// 			// } else if currClose > currExtreme.getATRThreshold(ATR_MULT_CUT_POSITION) {
+// 			// 	// ensure we are 50% short
+// 			// } else {
+// 			// 	if currClose < currExtreme.Value {
+// 			// 		// update current extreme with a new minimum
+// 			// 	}
+// 			// 	// ensure we are 100% long
+// 			// }
+// 		} else if currExtreme.Type == MAX_TYPE {
+// 			if currClose < currExtreme.getATRThreshold(ATR_MULT_ADD_POSITION) { // 100% short
+// 				*currExtreme = Extreme{MIN_TYPE, currClose, currATR}
+// 				p.CurrentPosition = &Position{ETF, SHORT_TYPE, LEVERAGE_MULTIPLE, p.CurrentValue * SHORT_MAX_PERCENTAGE, p.CurrentValue * SHORT_MAX_PERCENTAGE, currentDate, currClose, currExtreme, currentDate, currClose}
+// 			} else if currClose < currExtreme.getATRThreshold(ATR_MULT_CHANGE_POSITION) { // 50% short
+// 				p.CurrentPosition = &Position{ETF, SHORT_TYPE, LEVERAGE_MULTIPLE, p.CurrentValue * SHORT_PARTIAL_PERCENTAGE, p.CurrentValue * SHORT_PARTIAL_PERCENTAGE, currentDate, currClose, currExtreme, currentDate, currClose}
+// 			} else if currClose < currExtreme.getATRThreshold(ATR_MULT_EXIT_POSITION) {
+// 				// add a dummy position. subsequent calls should update the portfolio.
+// 				p.CurrentPosition = &Position{ETF, LONG_TYPE, LEVERAGE_MULTIPLE, 0, 0, currentDate, currClose, currExtreme, currentDate, currClose}
+// 			} else if currClose < currExtreme.getATRThreshold(ATR_MULT_CUT_POSITION) { // 50% long
+// 				p.CurrentPosition = &Position{ETF, LONG_TYPE, LEVERAGE_MULTIPLE, p.CurrentValue * LONG_PARTIAL_PERCENTAGE, p.CurrentValue * LONG_PARTIAL_PERCENTAGE, currentDate, currClose, currExtreme, currentDate, currClose}
+// 			} else { // 100% long
+// 				if currClose > currExtreme.Value {
+// 					*currExtreme = Extreme{MAX_TYPE, currClose, currATR}
+// 				}
+// 				p.CurrentPosition = &Position{ETF, LONG_TYPE, LEVERAGE_MULTIPLE, p.CurrentValue * LONG_MAX_PERCENTAGE, p.CurrentValue * LONG_MAX_PERCENTAGE, currentDate, currClose, currExtreme, currentDate, currClose}
+// 			}
+// 			// if currClose >= currExtreme.Value {
+// 			// 	currExtreme.Value = currClose
+// 			// 	currExtreme.ATR = currATR
+// 			// } else {
+// 			// 	// check ATR multiples
+// 			// }
+// 		} else {
+// 			panic("ILLEGAL TYPE")
+// 		}
+// 		// if currPosition.Type == LONG_TYPE {
+// 		// 	if currExtreme.Type == MIN_TYPE {
+// 		// 		if currClose > currExtreme.getATRThreshold(ATR_MULT_ADD_POSITION) {
+// 		// 			// ensure we are 100% long with a new maximum
+// 		// 		} else if currClose > currExtreme.getATRThreshold(ATR_MULT_CHANGE_POSITION) {
+// 		// 			// ensure we are 50% long
+// 		// 		} else if currClose > currExtreme.getATRThreshold(ATR_MULT_EXIT_POSITION) {
+// 		// 			// ensure we are exited
+// 		// 		} else if currClose > currExtreme.getATRThreshold(ATR_MULT_CUT_POSITION) {
+// 		// 			// ensure we are 50% short
+// 		// 		} else {
+// 		// 			if currClose < currExtreme.Value {
+// 		// 				// update current extreme with a new minimum
+// 		// 			}
+// 		// 			// ensure we are 100% long
+// 		// 		}
+// 		// 	} else if currExtreme.Type == MAX_TYPE {
+// 		// 		if currClose >= currExtreme.Value {
+// 		// 			currExtreme.Value = currClose
+// 		// 			currExtreme.ATR = currATR
+// 		// 		} else {
+// 		// 			// check ATR multiples
+// 		// 		}
+// 		// 	} else {
+// 		// 		panic("ILLEGAL TYPE")
+// 		// 	}
+// 		// } else if currPosition.Type == SHORT_TYPE {
+// 		// 	if currExtreme.Type == MIN_TYPE {
+// 		// 		if currClose <= currExtreme.Value {
+// 		// 			currExtreme.Value = currClose
+// 		// 			currExtreme.ATR = currATR
+// 		// 		} else {
+// 		// 			// check ATR multiples
+// 		// 		}
+// 		// 	} else if currExtreme.Type == MAX_TYPE {
+
+// 		// 	} else {
+// 		// 		panic("ILLEGAL TYPE")
+// 		// 	}
+// 		// } else {
+// 		// 	panic("ILLEGAL TYPE")
+// 		// }
+// 	}
+// }
+
 func (p *Portfolio) ToString() string {
-	// TODO: print out current position and last transaction
+	// TODO: print out last transaction
 	return fmt.Sprintf("%s - Current Capital: $%.2f\nCurrent Position: %s", p.CurrentDate, p.CurrentValue, p.CurrentPosition.(*Position).ToString())
 }
 
@@ -211,6 +350,7 @@ type Position struct {
 	Symbol            string
 	Type              string
 	LeverageMultiple  float64
+	InitialPercentage float64
 	InitialInvestment float64
 	CurrentValue      float64
 	EntryDate         time.Time
@@ -305,7 +445,7 @@ func simulate(portfolio *Portfolio, etfData *StockData) {
 				portfolio.EnterInitialPosition(etfData)
 			} else {
 				portfolio.UpdatePortfolio(currBarDate, bar.Close)
-				// TODO: adjustPositions
+				portfolio.AdjustPosition(currBarDate, bar.Close, bar.ATR)
 			}
 		}
 	}
