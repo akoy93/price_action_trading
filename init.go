@@ -22,10 +22,12 @@ const (
 	NUM_YEARS_DATA             int     = 1
 	START_PIVOT_WIDTH          int     = 3
 	PIVOT_WIDTH                int     = 5
+	SUPPORT_PIVOT_WIDTH        int     = 20
 	HORIZONTAL_SLOPE_THRESHOLD float64 = 0.005
 	TREND_LINE                 string  = "Trend Line"
 	TREND_CHANNEL_LINE         string  = "Trend Channel Line"
 	SUPPORT                    string  = "Support"
+	SUPPORT_RANGE_PERCENT      float64 = 0.00
 	NUM_INTERSECTIONS_REQUIRED int     = 2
 )
 
@@ -130,27 +132,43 @@ func main() {
 		if data != nil {
 			stock := data.(StockData)
 			fmt.Printf("(%d/%d) Evaluating %s...\n", i, numLines, stock.Symbol)
-			trendChannelLines, trendLines, horizontalLines := getLines(&stock, false)
-			tclInts, tlInts, hInts := getAllIntersections(&stock, trendChannelLines, trendLines, horizontalLines)
-			setup, ok := getBestSetup(tclInts, tlInts, hInts)
-			if ok {
-				output += fmt.Sprintf("=============== %s ===============\n", stock.Symbol)
-				output += "++++++++++++ Best Setup ++++++++++++\n"
-				outputSymbols += stock.Symbol + "\n"
-				for _, intersection := range setup {
-					output += fmt.Sprintf("----- %s -----\n", intersection.Type)
-					output += intersection.Line.ToString(&stock)
-					output += fmt.Sprintf("Crosses $%.2f on %s\n", intersection.Price, intersection.Date)
-				}
 
-				// print all data
-				output += "++++++++++++ All Lines ++++++++++++\n"
-				lines := [][]Intersection{tclInts, tlInts, hInts}
-				for _, set := range lines {
-					for _, intersection := range set {
+			// Trend Channel Line overshoot only, must check if stock price decreased
+			if true || stockDecreased(stock) {
+				trendChannelLines, trendLines, horizontalLines := getLines(&stock, false)
+				tclInts, tlInts := getAllIntersections(&stock, trendChannelLines, trendLines)
+				setup, ok := getBestSetup(tclInts, tlInts, len(horizontalLines))
+				if ok {
+					output += fmt.Sprintf("=============== %s ===============\n", stock.Symbol)
+					output += "++++++++++++ Best Setup ++++++++++++\n"
+					outputSymbols += stock.Symbol + "\n"
+					for _, intersection := range setup {
 						output += fmt.Sprintf("----- %s -----\n", intersection.Type)
 						output += intersection.Line.ToString(&stock)
 						output += fmt.Sprintf("Crosses $%.2f on %s\n", intersection.Price, intersection.Date)
+					}
+
+					// TODO support experiment
+					for _, currLine := range horizontalLines {
+						output += fmt.Sprintf("----- %s -----\n", "Support")
+						output += fmt.Sprintf("Support at $%.2f\n", currLine.Y1)
+					}
+
+					// print all data
+					output += "++++++++++++ All Lines ++++++++++++\n"
+					lines := [][]Intersection{tclInts, tlInts} //, hInts}
+					for _, set := range lines {
+						for _, intersection := range set {
+							output += fmt.Sprintf("----- %s -----\n", intersection.Type)
+							output += intersection.Line.ToString(&stock)
+							output += fmt.Sprintf("Crosses $%.2f on %s\n", intersection.Price, intersection.Date)
+						}
+					}
+
+					// TODO support experiment
+					for _, currLine := range horizontalLines {
+						output += fmt.Sprintf("----- %s -----\n", "Support")
+						output += fmt.Sprintf("Support at $%.2f\n", currLine.Y1)
 					}
 				}
 			}
@@ -158,6 +176,8 @@ func main() {
 			fmt.Printf("(%d/%d) Evaluating...\n", i, numLines)
 		}
 	}
+
+	fmt.Println(outputSymbols)
 
 	// write to file
 	outputBytes := []byte(output)
@@ -172,8 +192,33 @@ func main() {
 	}
 }
 
-func getBestSetup(trendChannelLineIntersections, trendLineIntersections, horizontalLineIntersections []Intersection) ([]Intersection, bool) {
+func stockDecreased(stock StockData) bool {
+	data := stock.Data
+	return data[len(data)-1].Close < data[len(data)-2].Close
+}
+
+// func getBestSetup(trendChannelLineIntersections, trendLineIntersections, horizontalLineIntersections []Intersection) ([]Intersection, bool) {
+// 	var bestPair []Intersection
+// 	bestRange := math.MaxFloat64
+
+// 	for _, tcl := range trendChannelLineIntersections {
+// 		for _, tl := range trendLineIntersections {
+// 			currRange, currPair := getPairRange(tcl, tl)
+// 			if currRange < bestRange {
+// 				bestRange = currRange
+// 				bestPair = currPair
+// 			}
+// 		}
+// 	}
+
+// 	setup := append(bestPair, horizontalLineIntersections...)
+
+// 	return setup, len(setup)-len(horizontalLineIntersections) >= NUM_INTERSECTIONS_REQUIRED
+// }
+
+func getBestSetup(trendChannelLineIntersections, trendLineIntersections []Intersection, numHorizontalLines int) ([]Intersection, bool) {
 	var bestPair []Intersection
+	var setup []Intersection
 	bestRange := math.MaxFloat64
 
 	for _, tcl := range trendChannelLineIntersections {
@@ -186,22 +231,34 @@ func getBestSetup(trendChannelLineIntersections, trendLineIntersections, horizon
 		}
 	}
 
-	setup := append(bestPair, horizontalLineIntersections...)
+	// return one trend channel line
+	if len(bestPair) == 0 && numHorizontalLines > 0 {
+		setup = trendChannelLineIntersections
+	} else {
+		setup = bestPair
+	}
 
-	return setup, len(setup)-len(horizontalLineIntersections) >= NUM_INTERSECTIONS_REQUIRED
+	return setup, len(setup) > 0
 }
 
 func getPairRange(tclIntersection, tlIntersection Intersection) (float64, []Intersection) {
 	return math.Abs(tclIntersection.Price - tlIntersection.Price), []Intersection{tclIntersection, tlIntersection}
 }
 
-func getAllIntersections(stock *StockData, trendChannelLines, trendLines, horizontalLines []Line) ([]Intersection, []Intersection, []Intersection) {
+func getAllIntersections(stock *StockData, trendChannelLines, trendLines []Line) ([]Intersection, []Intersection) {
 	trendChannelLineIntersections := getIntersections(stock, TREND_CHANNEL_LINE, trendChannelLines)
 	trendLineIntersections := getIntersections(stock, TREND_LINE, trendLines)
-	horizontalLineIntersections := getIntersections(stock, SUPPORT, horizontalLines)
 
-	return trendChannelLineIntersections, trendLineIntersections, horizontalLineIntersections
+	return trendChannelLineIntersections, trendLineIntersections
 }
+
+// func getAllIntersections(stock *StockData, trendChannelLines, trendLines, horizontalLines []Line) ([]Intersection, []Intersection, []Intersection) {
+// 	trendChannelLineIntersections := getIntersections(stock, TREND_CHANNEL_LINE, trendChannelLines)
+// 	trendLineIntersections := getIntersections(stock, TREND_LINE, trendLines)
+// 	horizontalLineIntersections := getIntersections(stock, SUPPORT, horizontalLines)
+
+// 	return trendChannelLineIntersections, trendLineIntersections, horizontalLineIntersections
+// }
 
 func getIntersections(stock *StockData, lineType string, lines []Line) []Intersection {
 	var intersections []Intersection
@@ -272,27 +329,50 @@ func getLinesFromPivots(stock *StockData, startPivots []int, pivots []int, getHi
 	var trendChannelLines []Line
 	var horizontalLines []Line
 
+	if getHighLines {
+		// get resistance lines
+	} else {
+		horizontalLines = getSupport(stock)
+	}
+
 	for _, line := range lines {
 		if getHighLines {
-			if line.Slope() > HORIZONTAL_SLOPE_THRESHOLD {
+			if line.Slope() > 0 { //HORIZONTAL_SLOPE_THRESHOLD {
 				trendChannelLines = append(trendChannelLines, line)
-			} else if line.Slope() < -HORIZONTAL_SLOPE_THRESHOLD {
+			} else { //if line.Slope() < -HORIZONTAL_SLOPE_THRESHOLD {
 				trendLines = append(trendLines, line)
-			} else {
-				horizontalLines = append(horizontalLines, line)
-			}
+			} 
+			// else {
+			// 	horizontalLines = append(horizontalLines, line)
+			// }
 		} else {
-			if line.Slope() > HORIZONTAL_SLOPE_THRESHOLD {
+			if line.Slope() >= 0 { // HORIZONTAL_SLOPE_THRESHOLD {
 				trendLines = append(trendLines, line)
-			} else if line.Slope() < -HORIZONTAL_SLOPE_THRESHOLD {
+			} else { // } if line.Slope() < 0 { //-HORIZONTAL_SLOPE_THRESHOLD {
 				trendChannelLines = append(trendChannelLines, line)
-			} else {
-				horizontalLines = append(horizontalLines, line)
-			}
+			} 
+			// else {
+			// 	horizontalLines = append(horizontalLines, line)
+			// }
 		}
 	}
 
 	return trendChannelLines, trendLines, horizontalLines
+}
+
+func getSupport(stock *StockData) ([]Line) {
+	var support []Line
+	pivots := getPivots(stock, false, SUPPORT_PIVOT_WIDTH)
+	for _, pivot := range pivots {
+		supportLow := stock.Data[pivot].Low
+		currentIndex := len(stock.Data) - 1
+		currentHigh := stock.Data[currentIndex].High
+		currentLow := stock.Data[currentIndex].Low
+		if supportLow > currentLow * (1 - SUPPORT_RANGE_PERCENT) && supportLow < currentHigh * (1 + SUPPORT_RANGE_PERCENT) {
+			support = append(support, Line{pivot, supportLow, currentIndex, supportLow})
+		}
+	}
+	return support
 }
 
 func getStartPivots(stock *StockData, getHighPivots bool) []int {
