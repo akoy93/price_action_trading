@@ -27,9 +27,8 @@ const (
 	// symbol, month, day, year, month, day, year
 	YAHOO_FINANCE_API_URL string = "http://real-chart.finance.yahoo.com/table.csv?s=%s&d=%s&e=%s&f=%s&g=d&a=%s&b=%s&c=%s&ignore=.csv"
 	SUMMARY_FILE          string = "/Users/albert/Desktop/stocks/output/%s_summary.txt"
-	// DETAILED_SUMMARY_FILE string = "/Users/albert/Desktop/stocks/output/%s_detailed_summary.txt"
 	ETF                   string = "QQQ"
-	NUM_YEARS_DATA        int    = 15
+	NUM_YEARS_DATA        int    = 14 // avoid stock split in 2000
 	LONG_TYPE             string = "LONG"
 	SHORT_TYPE            string = "SHORT"
 	MIN_TYPE              string = "MIN"
@@ -45,9 +44,9 @@ const (
 
 	// Portfolio Configuration
 	INITIAL_CAPITAL   float64 = 100000.0
-	LEVERAGE_MULTIPLE float64 = 1.0
+	LEVERAGE_MULTIPLE float64 = 3.0
 	LONG_PARTIAL_PERCENTAGE float64 = 0.5
-	SHORT_MAX_PERCENTAGE float64 = 0.5
+	SHORT_PARTIAL_PERCENTAGE float64 = 0.5
 )
 
 type Portfolio struct {
@@ -61,25 +60,91 @@ type Portfolio struct {
 	Transactions []Transaction
 }
 
-func (p *Portfolio) EnterInitialPosition(startDate string, data StockData) {
+// enters an initial position
+func (p *Portfolio) EnterInitialPosition(data *StockData) {
+	currExtreme := Extreme{}
+	initialPrice := data.Data[0].Close
+	initialATR := data.Data[0].ATR
+	startDate, _ := time.Parse(TIME_LAYOUT, p.StartDate)
+	var startDateIndex int
+	var offset int
 
+	// find an extreme value (local min or max) before the start date of the portfolio
+	for i, bar := range data.Data {
+		currBarDate, _ := time.Parse(TIME_LAYOUT, bar.Date)
+		if currBarDate.Before(startDate) || currBarDate.Equal(startDate) {
+			// TODO: it is possible that an extreme is never chosen if ATR range is too wide
+			// get initial extreme
+			if currExtreme == (Extreme{}) {
+				if bar.Close > initialPrice + ATR_MULT_ADD_POSITION * initialATR {
+					currExtreme = Extreme{MAX_TYPE, bar.Close, bar.ATR}
+				} else if bar.Close < initialPrice - ATR_MULT_ADD_POSITION * initialATR {
+					currExtreme = Extreme{MIN_TYPE, bar.Close, bar.ATR}
+				}
+			} else { // continually update the extreme as needed
+				if currExtreme.Type == MAX_TYPE && bar.Close > currExtreme.Value {
+					currExtreme.Value = bar.Close
+					currExtreme.ATR = bar.ATR
+				} else if currExtreme.Type == MIN_TYPE && bar.Close < currExtreme.Value {
+					currExtreme.Value = bar.Close
+					currExtreme.ATR = bar.ATR
+				} else if currExtreme.Type == MAX_TYPE && bar.Close < currExtreme.getATRThreshold(ATR_MULT_ADD_POSITION) {
+					currExtreme = Extreme{MIN_TYPE, bar.Close, bar.ATR}
+				} else if currExtreme.Type == MIN_TYPE && bar.Close > currExtreme.getATRThreshold(ATR_MULT_ADD_POSITION) {
+					currExtreme = Extreme{MAX_TYPE, bar.Close, bar.ATR}
+				}
+			}
+			if currBarDate.Equal(startDate) {
+				offset = 1
+			}
+		} else {
+			startDateIndex = i - offset
+			break
+		}
+	}
+
+	// choose an initial position based on position relative to the extreme value
+	startDatePrice := data.Data[startDateIndex].Close
+	fmt.Println(startDatePrice)
+	fmt.Println(currExtreme)
+	if currExtreme.Type == MAX_TYPE {
+		if startDatePrice < currExtreme.getATRThreshold(ATR_MULT_ADD_POSITION) { // 100% short
+			panic("SHOULD NOT BE REACHABLE - SHORT")
+		} else if startDatePrice < currExtreme.getATRThreshold(ATR_MULT_CHANGE_POSITION) { // 50% short
+			p.CurrentPosition = &Position{ETF, SHORT_TYPE, LEVERAGE_MULTIPLE, p.InitialValue * SHORT_PARTIAL_PERCENTAGE, p.InitialValue * SHORT_PARTIAL_PERCENTAGE, startDate, startDatePrice, &currExtreme, startDate, startDatePrice}
+		} else if startDatePrice < currExtreme.getATRThreshold(ATR_MULT_EXIT_POSITION) {
+			// add a dummy position. subsequent calls should update the portfolio.
+			p.CurrentPosition = &Position{ETF, LONG_TYPE, LEVERAGE_MULTIPLE, 0, 0, startDate, startDatePrice, &currExtreme, startDate, startDatePrice}
+		} else if startDatePrice < currExtreme.getATRThreshold(ATR_MULT_CUT_POSITION) { // 50% long
+			p.CurrentPosition = &Position{ETF, LONG_TYPE, LEVERAGE_MULTIPLE, p.InitialValue * LONG_PARTIAL_PERCENTAGE, p.InitialValue * LONG_PARTIAL_PERCENTAGE, startDate, startDatePrice, &currExtreme, startDate, startDatePrice}
+		} else { // 100% long
+			p.CurrentPosition = &Position{ETF, LONG_TYPE, LEVERAGE_MULTIPLE, p.InitialValue, p.InitialValue, startDate, startDatePrice, &currExtreme, startDate, startDatePrice}
+		}
+	} else if currExtreme.Type == MIN_TYPE {
+		if startDatePrice > currExtreme.getATRThreshold(ATR_MULT_ADD_POSITION) { // 100% long
+			panic("SHOULD NOT BE REACHABLE - LONG")
+		} else if startDatePrice > currExtreme.getATRThreshold(ATR_MULT_CHANGE_POSITION) { // 50% long
+			p.CurrentPosition = &Position{ETF, LONG_TYPE, LEVERAGE_MULTIPLE, p.InitialValue * LONG_PARTIAL_PERCENTAGE, p.InitialValue * LONG_PARTIAL_PERCENTAGE, startDate, startDatePrice, &currExtreme, startDate, startDatePrice}
+		} else if startDatePrice > currExtreme.getATRThreshold(ATR_MULT_EXIT_POSITION) {
+			// add a dummy position. subsequent calls should update the portfolio.
+			p.CurrentPosition = &Position{ETF, SHORT_TYPE, LEVERAGE_MULTIPLE, 0, 0, startDate, startDatePrice, &currExtreme, startDate, startDatePrice}
+		} else if startDatePrice > currExtreme.getATRThreshold(ATR_MULT_CUT_POSITION) { // 50% short
+			p.CurrentPosition = &Position{ETF, SHORT_TYPE, LEVERAGE_MULTIPLE, p.InitialValue * SHORT_PARTIAL_PERCENTAGE, p.InitialValue * SHORT_PARTIAL_PERCENTAGE, startDate, startDatePrice, &currExtreme, startDate, startDatePrice}
+		} else { // 100% short
+			p.CurrentPosition = &Position{ETF, SHORT_TYPE, LEVERAGE_MULTIPLE, p.InitialValue, p.InitialValue, startDate, startDatePrice, &currExtreme, startDate, startDatePrice}
+		}
+	} else {
+		panic("ILLEGAL TYPE")
+	}
 }
 
 // updates the portfolio's current position with the current day's data
 // since we're simulating only EOD trades if closing prices exceed ATR multiples,
 // we take the current closing price no matter what it is
-func (p *Portfolio) UpdatePortfolio(currentDate string, currClose float64) {
+func (p *Portfolio) UpdatePortfolio(currentDate time.Time, currClose float64) {
 	if p.CurrentPosition != nil {
-		currPosition := p.CurrentPosition.(Position)
-		prevClose := currPosition.CurrentPrice
-		currPosition.CurrentDate = currentDate
-		currPosition.CurrentPrice = currClose
-		p.CurrentPosition = currPosition
-
-		// update portfolio value
-		percentChange := (currClose / prevClose) - 1
-		p.CurrentValue *= (1 + (percentChange * LEVERAGE_MULTIPLE))
-		fmt.Printf("$%.2f\n", p.CurrentValue)
+		currPosition := p.CurrentPosition.(*Position)
+		p.CurrentValue += currPosition.Update(currentDate, currClose)
 	}
 	// TODO: add logging
 	// date, short or long, percentage gain, new value
@@ -91,7 +156,7 @@ func (p *Portfolio) UpdatePortfolio(currentDate string, currClose float64) {
 func (p *Portfolio) AdjustPosition(currentDate string, currClose, currATR float64) bool {
 	// pass along current extremes
 	if p.CurrentPosition != nil {
-		currPosition := p.CurrentPosition.(Position)
+		currPosition := p.CurrentPosition.(*Position)
 		currExtreme := currPosition.ReferencedExtreme
 		if currPosition.Type == LONG_TYPE {
 			if currExtreme.Type == MIN_TYPE {
@@ -137,19 +202,43 @@ func (p *Portfolio) AdjustPosition(currentDate string, currClose, currATR float6
 
 func (p *Portfolio) ToString() string {
 	// TODO: print out current position and last transaction
-	return fmt.Sprintf("%s - Current Capital: $%.2f; Current Position", p.CurrentDate, p.CurrentValue)
+	return fmt.Sprintf("%s - Current Capital: $%.2f\nCurrent Position %s", p.CurrentDate, p.CurrentValue, p.CurrentPosition.(*Position).ToString())
 }
 
 type Position struct {
 	Symbol string
 	Type string
-	InvestedCapital float64
-	PercentageInvested float64
-	EntryDate string
+	LeverageMultiple float64
+	InitialInvestment float64
+	CurrentValue float64
+	EntryDate time.Time
 	EntryPrice float64
-	ReferencedExtreme Extreme
-	CurrentDate string
+	ReferencedExtreme *Extreme
+	CurrentDate time.Time
 	CurrentPrice float64
+}
+
+// returns the net change in the position
+func (p *Position) Update(currDate time.Time, currClose float64) float64 {
+	prevValue := p.CurrentValue
+	percentChange := (currClose / p.CurrentPrice) - 1
+	p.CurrentPrice = currClose
+	p.CurrentDate = currDate
+
+	if p.Type == LONG_TYPE {
+		p.CurrentValue = p.CurrentValue * (1 + (percentChange * p.LeverageMultiple))
+	} else if p.Type == SHORT_TYPE {
+		p.CurrentValue = p.CurrentValue * (1 - (percentChange * p.LeverageMultiple))
+	} else {
+		panic("ILLEGAL TYPE")
+	}
+
+	return p.CurrentValue - prevValue
+}
+
+func (p *Position) ToString() string {
+	return fmt.Sprintf("%s %s - %.2fx Leverage - Entry Price and Date: $%.1f (%s) - Current Price and Date: $%.2f (%s) - Initial Investment: $%.2f - Current Value: $%.2f", 
+		p.Type, p.Symbol, p.LeverageMultiple, p.EntryPrice, p.EntryDate.String(), p.CurrentPrice, p.CurrentDate.String(), p.InitialInvestment, p.CurrentValue)
 }
 
 type Extreme struct {
@@ -195,22 +284,16 @@ func (b *StockBar) ToString() string {
 
 func main() {
 	args := os.Args[1:]
+	if len(args) != 2 {
+		panic("Not enough arguments.")
+	}
 	portfolio := Portfolio{args[0], args[1], args[0], INITIAL_CAPITAL, INITIAL_CAPITAL, nil, make([]Position, 0), make([]Transaction, 0)}
 	ETFData := getStockData(ETF, NUM_YEARS_DATA)
-	simulate(portfolio, ETFData)
-	// for _, bar := range ETFData.Data {
-	// 	fmt.Println(bar.ToString())
-	// }
+	simulate(&portfolio, &ETFData)
 	fmt.Println(portfolio.ToString())
 }
 
-	// EntryDate string
-	// EntryPrice float64
-	// ReferencedExtreme Extreme
-	// CurrentDate string
-	// CurrentPrice float64
-
-func simulate(portfolio Portfolio, etfData StockData) {
+func simulate(portfolio *Portfolio, etfData *StockData) {
 	startDate, _ := time.Parse(TIME_LAYOUT, portfolio.StartDate)
 	endDate, _ := time.Parse(TIME_LAYOUT, portfolio.EndDate)
 	for _, bar := range etfData.Data {
@@ -218,9 +301,10 @@ func simulate(portfolio Portfolio, etfData StockData) {
 		if (currBarDate.After(startDate) || currBarDate.Equal(startDate)) && (currBarDate.Before(endDate) || currBarDate.Equal(endDate)) {
 			// create initial position
 			if portfolio.CurrentPosition == nil {
-				portfolio.CurrentPosition = Position{ETF, LONG_TYPE, portfolio.InitialValue, 1, currBarDate.String(), bar.Close, Extreme{}, currBarDate.String(), bar.Close}
+				portfolio.EnterInitialPosition(etfData)
 			} else {
-				portfolio.UpdatePortfolio(currBarDate.String(), bar.Close)
+				portfolio.UpdatePortfolio(currBarDate, bar.Close)
+				// TODO: adjustPositions
 			}
 		}
 	}
